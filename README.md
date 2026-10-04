@@ -1,6 +1,6 @@
 # Gitea GitHub Sync
 
-Enrich all GitHub pull mirrors owned by a Gitea account with repository metadata,
+Enrich all GitHub pull mirrors on your own Gitea instance with repository metadata,
 topics, issues and comments that native Git mirroring does not synchronize.
 
 The script discovers repositories automatically and derives each GitHub source
@@ -34,7 +34,19 @@ Use `gitea-github-sync.conf.example` as the template for
 overwriting its tokens. Set your Gitea URL and token, the account owner, and a
 GitHub token where needed. An empty `GITEA_OWNER` selects the token's account.
 
-The example contains deployment-specific defaults; replace them for your server.
+Set `GITEA_URL` to **your own Gitea instance** in the configuration:
+
+```bash
+GITEA_URL='https://gitea.example.com'
+GITEA_OWNER=''
+```
+
+Replace the example address with your server's URL. For an installation under
+a subdirectory, use e.g. `GITEA_URL='https://example.com/gitea'`.
+Do not append `/api/v1`. There is no built-in Gitea server address; an absent or
+empty `GITEA_URL` stops the script before any API request. `GITEA_OWNER` may be
+left empty to detect the authenticated account, or set to an owner to scan.
+
 Restrict the configuration to its owner:
 
 ```bash
@@ -100,4 +112,4 @@ mock API tests, including multiple mirrors, idempotency, throttling and quiet mo
 
 Download the script or the complete bundle from
 [GitHub Releases](https://github.com/adamzend/gitea-github-sync/releases).
-The first release is **v1.0.0**.
+The latest release is **v1.0.1**, which requires an explicitly configured Gitea URL.

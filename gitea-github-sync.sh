@@ -72,7 +72,7 @@ if [[ "${GITEA_SYNC_QUIET_WORKER:-}" == 1 ]]; then
     trap 'rc=$?; log "Background worker finished: PID=$$, exit_status=$rc"' EXIT
     log "Background worker started: PID=$$"
 fi
-: "${GITEA_URL:=https://git.an0n.eu}"
+[[ -n "${GITEA_URL:-}" ]] || die "GITEA_URL is required in $CONFIG_FILE (for example https://gitea.example.com)"
 : "${GITEA_OWNER:=}"
 : "${GITHUB_API:=https://api.github.com}"
 : "${GITHUB_API_VERSION:=2026-03-10}"
@@ -91,7 +91,8 @@ for cmd in curl jq flock mktemp rm cmp cat date mkdir awk sleep; do
 done
 GITEA_URL=${GITEA_URL%/}
 GITHUB_API=${GITHUB_API%/}
-[[ "$GITEA_URL" == http://* || "$GITEA_URL" == https://* ]] || die "Invalid GITEA_URL"
+[[ "$GITEA_URL" =~ ^https?://[^/?#[:space:]@]+(/[^?#[:space:]]*)?$ ]] ||
+    die "Invalid GITEA_URL: use your instance base URL, including any path prefix, without credentials, query or fragment"
 [[ "$GITHUB_API" == http://* || "$GITHUB_API" == https://* ]] || die "Invalid GITHUB_API"
 exec 9>"$LOCK_FILE" || die "Cannot open lock: $LOCK_FILE"
 flock -n 9 || die "Another synchronization is running"

@@ -28,6 +28,15 @@ selects the account identified by GITEA_TOKEN. GITHUB_TOKEN is optional for
 public sources and required for private sources. It is recommended for large
 scans because of GitHub API rate limits.
 
+GITEA_URL must be the address of YOUR Gitea instance, for example:
+  GITEA_URL='https://gitea.example.com'
+For a server mounted below a path:
+  GITEA_URL='https://example.com/gitea'
+Replace these examples with your actual server address. Do not append /api/v1.
+There is no default Gitea server. A missing or empty GITEA_URL stops the script
+before API requests. Existing configurations with GITEA_URL already set remain
+valid. The example leaves GITEA_OWNER empty to detect the token's account.
+
 The Gitea token must allow account/repository reads and repository settings,
 issues and comment writes. Its account must be able to edit imported comments.
 The configuration is trusted Bash code. Restrict its permissions:
@@ -106,7 +115,7 @@ with output managed by the scheduler instead of detaching with --apply-quiet.
 
 Configuration reference
 -----------------------
-GITEA_URL: Base web URL, default https://git.an0n.eu. Include any path prefix,
+GITEA_URL: Required base web URL of your own Gitea instance; no default. Include any path prefix,
   for example https://example.org/gitea. Do not append /api/v1.
 GITEA_OWNER: Owner to scan; empty means the authenticated token account.
 GITEA_TOKEN: Required Gitea API token; distinct from the GitHub token.

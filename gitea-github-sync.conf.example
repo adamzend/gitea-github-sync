@@ -2,11 +2,14 @@
 GITEA_TOKEN='REPLACE_WITH_GITEA_TOKEN'
 # Optional for public GitHub repositories; recommended to increase rate limits.
 GITHUB_TOKEN=''
-GITEA_URL='https://git.an0n.eu'
+# Required: replace this example with your own Gitea instance URL.
+# Include a web path prefix if used, e.g. https://example.com/gitea.
+# Do not append /api/v1. There is no built-in server address.
+GITEA_URL='https://gitea.example.com'
 # Leave empty to discover the account from GITEA_TOKEN, or specify an owner.
 # All repositories owned by this account are scanned, including private ones
 # visible to the token. Collaborator repositories owned by others are excluded.
-GITEA_OWNER='adam'
+GITEA_OWNER=''
 # Source owners and repository names are derived from each mirror's original_url.
 GITHUB_API='https://api.github.com'
 GITHUB_API_VERSION='2026-03-10'
