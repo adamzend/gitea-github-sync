@@ -1,0 +1,5 @@
+gitea-github-sync.conf
+*.log
+*.lock
+*.bak
+.env
