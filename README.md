@@ -113,3 +113,8 @@ mock API tests, including multiple mirrors, idempotency, throttling and quiet mo
 Download the script or the complete bundle from
 [GitHub Releases](https://github.com/adamzend/gitea-github-sync/releases).
 The latest release is **v1.0.1**, which requires an explicitly configured Gitea URL.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0-only).
+See [LICENSE](LICENSE) for the full license text.
