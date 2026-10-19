@@ -82,6 +82,42 @@ check the log's final `exit_status` to determine the actual result.
 sudo tail -f /var/log/gitea-github-sync.log
 ```
 
+## Weekly cron job
+
+The release includes [`gitea-github-sync.cron`](gitea-github-sync.cron), which runs
+the script **as root every Monday at 03:00 in the server's timezone**.
+First configure `/etc/gitea-github-sync.conf` with your instance URL and tokens.
+From the extracted release directory, install the script and cron entry:
+
+```bash
+sudo install -o root -g root -m 755 ./gitea-github-sync.sh /usr/local/bin/gitea-github-sync.sh
+sudo install -o root -g root -m 644 ./gitea-github-sync.cron /etc/cron.d/gitea-github-sync
+```
+
+This does not overwrite your configuration or trigger an immediate sync. Check
+for an existing equivalent job before installing, so it is not scheduled twice.
+This file is for `/etc/cron.d`, where the `root` column is required; do not paste
+it unchanged into a per-user `crontab -e`.
+
+```bash
+sudo cat /etc/cron.d/gitea-github-sync
+systemctl is-active cron
+systemctl is-enabled cron
+timedatectl show -p Timezone
+sudo tail -n 100 /var/log/gitea-github-sync.log
+```
+
+Cron must be installed and running. On a system with an existing active cron
+service, a new `/etc/cron.d` file is read automatically without a restart.
+The log path can be overridden by `QUIET_LOG_FILE`. Look for
+`Background worker finished: PID=..., exit_status=0` to confirm successful
+completion. Starting the quiet worker alone does not confirm completion.
+If using a scheduler that must track the final process exit code, use foreground
+`--apply` instead. No additional shell output redirection is needed for quiet mode.
+
+See the [changelog](CHANGELOG.md) for what changed and why. Quiet mode already
+existed in v1.0.1; v1.0.2 adds the reusable scheduling setup and documentation.
+
 **Depending on the number of repositories/mirrors and their issues/comments,
 execution can take a very long time, potentially hours.** Quiet mode does not
 speed up synchronization. GitHub limits may require a later run.
@@ -112,7 +148,7 @@ mock API tests, including multiple mirrors, idempotency, throttling and quiet mo
 
 Download the script or the complete bundle from
 [GitHub Releases](https://github.com/adamzend/gitea-github-sync/releases).
-The latest release is **v1.0.1**, which requires an explicitly configured Gitea URL.
+The latest release is **v1.0.2**, with weekly root cron setup and deployment notes.
 
 ## License
 

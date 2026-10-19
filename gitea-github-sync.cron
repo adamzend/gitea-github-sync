@@ -1,0 +1,5 @@
+# Install as /etc/cron.d/gitea-github-sync (root:root, mode 644).
+# Runs every Monday at 03:00 in the server's timezone.
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 3 * * 1 root /bin/bash /usr/local/bin/gitea-github-sync.sh --config /etc/gitea-github-sync.conf --apply-quiet

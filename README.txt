@@ -57,6 +57,35 @@ requests while still enriching repositories. Non-root runs need LOCK_FILE in
 a writable, trusted directory. All runs must use the same lock file.
 No schedule is installed; the script can be invoked by cron or systemd.
 
+Weekly root cron setup (v1.0.2)
+------------------------------
+Quiet mode was already supported in v1.0.1. This release keeps the script
+unchanged and adds a reusable system cron file plus deployment instructions.
+An older installed copy must be replaced before scheduling --apply-quiet.
+
+After configuring /etc/gitea-github-sync.conf, run from the release directory:
+  sudo install -o root -g root -m 755 ./gitea-github-sync.sh /usr/local/bin/gitea-github-sync.sh
+  sudo install -o root -g root -m 644 ./gitea-github-sync.cron /etc/cron.d/gitea-github-sync
+
+The supplied entry runs as root every Monday at 03:00 in the server's timezone.
+It uses absolute script/configuration paths and an explicit command search PATH.
+The cron file does not run the task immediately. Check for equivalent existing
+jobs to avoid duplicate scheduling. This is an /etc/cron.d file with a username
+column; it cannot be pasted unchanged into a per-user crontab.
+
+Verify the setup:
+  sudo cat /etc/cron.d/gitea-github-sync
+  systemctl is-active cron
+  systemctl is-enabled cron
+  timedatectl show -p Timezone
+  sudo tail -n 100 /var/log/gitea-github-sync.log
+
+The cron service must be installed and active. No restart is needed for an
+already-running cron daemon to read the new entry. Look for the background
+worker's final exit_status=0 in the log after execution. A valid schedule or
+successful background launch does not itself prove a completed synchronization.
+For a customized QUIET_LOG_FILE, inspect that file instead.
+
 Complete command-line reference
 -------------------------------
 --dry-run
