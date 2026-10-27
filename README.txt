@@ -305,3 +305,37 @@ foreground synchronization engine in a detached process.
 
 API reference:
 https://docs.gitea.com/api/1.23/operations/user-list-repos/
+
+## Comment pagination and moved GitHub repositories (v1.0.3)
+
+Gitea's per-issue comments endpoint returns the complete comment list without
+pagination. The script reads it once, including lists longer than 50 comments.
+Other paginated lists are read until an empty page, with repeated-page detection.
+GitHub GET redirects are followed for up to five hops within the configured API
+origin only. External origins, protocol downgrades and redirect loops fail safely.
+HTTP 404 still requires checking the source URL and token access.
+
+After upgrading, keep the existing configuration and tokens. A failed run may
+have completed other repositories; synchronization markers make reruns idempotent.
+Quiet mode secures its log with chmod 600 on each launch, which can mask an ACL
+previously granted to a monitoring account. An administrator can restore that
+account's read ACL after launch without making the log world-readable.
+
+GitHub sources returning HTTP 404 are counted as `unavailable`, separately from
+`failed` and discovery filters (`skipped`). Existing mirrors are preserved; the
+run can succeed with unavailable sources. Check the source or access if unexpected.
+
+## Progress logging
+
+Progress is logged at the start of each stage and approximately every 60 seconds
+while processing pages, indexing issues, reading Gitea comments, mapping GitHub
+comments and comparing/applying updates. Entries include the repository, stage,
+page or processed counts and elapsed seconds since script startup. Page counts
+are completed pages; processed counts include the current item, not successful
+writes. The final summaries report completed operations.
+Set PROGRESS_INTERVAL to a positive integer in seconds (default 60, max 99999).
+Progress is checked at work boundaries: a slow API request, retry or JSON operation
+can delay the next entry. These messages are not a separate liveness watchdog.
+In --apply-quiet mode all progress goes to QUIET_LOG_FILE, not the terminal.
+An unavailable GitHub source is preserved and counted without a Failure diagnostic.
+Other failures, including JSON validation errors, still fail the repository.

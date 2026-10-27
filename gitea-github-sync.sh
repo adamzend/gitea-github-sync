@@ -29,6 +29,17 @@ USAGE
 }
 log() { printf '[%s] %s%s\n' "$(date '+%F %T')" "${REPO_LABEL:+[$REPO_LABEL] }" "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
+# Throttled progress at work boundaries; no extra process or credential output.
+PROGRESS_LAST=-1
+PROGRESS_STAGE=
+progress() {
+    local stage=$1; shift
+    if [[ "$stage" != "$PROGRESS_STAGE" ]] || ((PROGRESS_LAST < 0 || SECONDS - PROGRESS_LAST >= PROGRESS_INTERVAL)); then
+        log "Progress: $stage; $*; elapsed=${SECONDS}s"
+        PROGRESS_LAST=$SECONDS
+        PROGRESS_STAGE=$stage
+    fi
+}
 on_error() { local rc=$1 line=$2; log "Failure at line $line (exit $rc); synchronization incomplete."; exit "$rc"; }
 trap 'on_error "$?" "$LINENO"' ERR
 while (($#)); do
@@ -78,6 +89,8 @@ fi
 : "${GITHUB_API_VERSION:=2026-03-10}"
 : "${LOCK_FILE:=/var/run/gitea-github-sync.lock}"
 : "${MAX_PAGES:=10000}"
+: "${PROGRESS_INTERVAL:=60}"
+[[ "$PROGRESS_INTERVAL" =~ ^[1-9][0-9]{0,4}$ ]] || die "PROGRESS_INTERVAL must be a positive integer (seconds)"
 : "${GITHUB_RATE_LIMIT_MAX_WAIT:=60}"
 : "${GITHUB_RATE_LIMIT_RETRIES:=2}"
 [[ -n "${GITEA_TOKEN:-}" ]] || die "GITEA_TOKEN is missing from the configuration"
@@ -142,7 +155,9 @@ response_header() {
 request() {
     local service=$1 method=$2 url=$3 output=$4 payload=${5:-} allow_missing=${6:-0} status
     local headers="$WORK_DIR/response.headers" message remaining reset retry_after wait_seconds
-    local attempt=0 waited=0 now reset_wait
+    local attempt=0 waited=0 now reset_wait redirects=0 location api_origin
+    api_origin=${GITHUB_API#*://}
+    api_origin="${GITHUB_API%%://*}://${api_origin%%/*}"
     local -a args=(-q --silent --show-error --connect-timeout 15 --max-time 120
         --user-agent 'gitea-github-sync/3.1' -D "$headers"
         -H "@$HEADER_DIR/$service.headers" -X "$method" -o "$output" -w '%{http_code}')
@@ -157,6 +172,18 @@ request() {
     while :; do
         status=$(curl "${args[@]}" "$url") || die "Transport error: $method $url; run dry-run before retrying APPLY"
         if [[ "$status" == 2[0-9][0-9] ]]; then return 0; fi
+        if [[ "$service" == gh && "$method" == GET && "$status" =~ ^(301|302|303|307|308)$ ]]; then
+            location=$(response_header "$headers" location)
+            # Resolve root-relative redirects; never send credentials to another origin.
+            if [[ "$location" == /* && "$location" != //* ]]; then location="$api_origin$location"; fi
+            [[ "$location" == "$api_origin/"* && "$location" != *[[:space:]]* && "$location" != *\\* ]] ||
+                die "Rejected GitHub redirect outside the configured API origin"
+            ((redirects < 5)) || die "GitHub redirect limit exceeded"
+            redirects=$((redirects + 1))
+            log "Following GitHub HTTP $status redirect ($redirects/5)"
+            url=$location
+            continue
+        fi
         if [[ "$status" == 404 && "$allow_missing" == 1 ]]; then return 4; fi
         message=$(jq -r 'if type=="object" and (.message|type)=="string" then
             .message | gsub("[[:cntrl:]]"; " ") | .[:1000]
@@ -204,13 +231,18 @@ request() {
 }
 validate() { jq -e "$2" "$1" >/dev/null || die "Invalid JSON data: ${1##*/}"; }
 paginate() {
-    local service=$1 url=$2 output=$3 page count
+    local service=$1 url=$2 output=$3 page count total=0
     : > "$output"
     for ((page=1; page<=MAX_PAGES; page++)); do
+        progress "Reading $service ${output##*/}" "page=$page, records_read=$total"
         request "$service" GET "$url&page=$page" "$WORK_DIR/page.json"
         validate "$WORK_DIR/page.json" 'type == "array" and all(.[]; type == "object")'
         count=$(jq length "$WORK_DIR/page.json")
-        ((count > 0)) || return 0
+        if ((count == 0)); then
+            log "Read complete: $service ${output##*/}; pages=$((page - 1)), records=$total"
+            return 0
+        fi
+        total=$((total + count))
         if ((page > 1)) && cmp -s "$WORK_DIR/page.json" "$WORK_DIR/previous-page.json"; then
             die "API returned a repeated page: $url"
         fi
@@ -238,6 +270,9 @@ comment_schema='def pos: type == "number" and . > 0 and floor == .;
 sync_repository() (
 set -Eeuo pipefail
 local entry=$1 repo_id source current_source
+local indexed=0 read_issues=0 read_comments=0 mapped_comments=0 processed_issues=0 processed_comments=0
+PROGRESS_LAST=-1
+PROGRESS_STAGE=
 local GITEA_OWNER GITEA_REPO GITHUB_OWNER GITHUB_REPO WORK_DIR
 repo_id=$(jq -r .id <<< "$entry")
 GITEA_OWNER=$(jq -r .owner.login <<< "$entry")
@@ -255,7 +290,17 @@ GT="$GITEA_URL/api/v1/repos/$GITEA_OWNER/$GITEA_REPO"
 GH="$GITHUB_API/repos/$GITHUB_OWNER/$GITHUB_REPO"
 log "GitHub $GITHUB_OWNER/$GITHUB_REPO -> Gitea $GITEA_OWNER/$GITEA_REPO; mode $MODE"
 request gt GET "$GT" "$WORK_DIR/gt-repo.json"
-request gh GET "$GH" "$WORK_DIR/gh-repo.json"
+if request gh GET "$GH" "$WORK_DIR/gh-repo.json" "" 1; then
+    :
+else
+    rc=$?
+    if ((rc == 4)); then
+        log "Source unavailable (GitHub HTTP 404): removed, private or inaccessible; preserving the mirror"
+        : > "$RUN_DIR/unavailable-$repo_id"
+        exit 0
+    fi
+    exit "$rc"
+fi
 for service in gt gh; do
     validate "$WORK_DIR/$service-repo.json" 'type=="object" and (.id|type=="number") and
         (.default_branch|type=="string") and (.description==null or (.description|type=="string")) and
@@ -296,6 +341,8 @@ done
 declare -A gh_numbers=() gt_numbers=() gt_comment_ids=() seen_gh=()
 while IFS= read -r record; do
     printf '%s\n' "$record" > "$WORK_DIR/record.json"
+    indexed=$((indexed + 1))
+    progress "Indexing GitHub issues" "processed=$indexed"
     id=$(jq -r .id "$WORK_DIR/record.json")
     number=$(jq -r .number "$WORK_DIR/record.json")
     [[ -z "${seen_gh[$id]+x}" && -z "${gh_numbers[$number]+x}" ]] || die "Duplicate GitHub issue $id"
@@ -304,17 +351,23 @@ while IFS= read -r record; do
 done < "$WORK_DIR/gh-issues.jsonl"
 while IFS= read -r record; do
     printf '%s\n' "$record" > "$WORK_DIR/record.json"
+    read_issues=$((read_issues + 1))
+    progress "Reading Gitea issues and comments" "issues=$read_issues, comments=$read_comments"
     id=$(marker "$WORK_DIR/record.json" github-sync-id)
     [[ -n "$id" ]] || continue
     [[ -z "${gt_numbers[$id]+x}" ]] || die "Duplicate github-sync-id:$id in Gitea"
     number=$(jq -r .number "$WORK_DIR/record.json")
     gt_numbers[$id]=$number
     printf '%s\n' "$record" > "$WORK_DIR/gt-issue-$id.json"
-    paginate gt "$GT/issues/$number/comments?limit=50" "$WORK_DIR/comments.jsonl"
-    jq -s '.' "$WORK_DIR/comments.jsonl" > "$WORK_DIR/comments.json"
-    validate "$WORK_DIR/comments.json" "$comment_schema"
+    # Gitea's per-issue comments endpoint returns the complete list and ignores
+    # page/limit. Only list endpoints that support pagination use paginate().
+    request gt GET "$GT/issues/$number/comments" "$WORK_DIR/comments.json"
+    validate "$WORK_DIR/comments.json" "type == \"array\" and $comment_schema"
+    jq -c '.[]' "$WORK_DIR/comments.json" > "$WORK_DIR/comments.jsonl"
     while IFS= read -r comment; do
         printf '%s\n' "$comment" > "$WORK_DIR/record.json"
+        read_comments=$((read_comments + 1))
+        progress "Reading Gitea issues and comments" "issues=$read_issues, current_issue=#$number, comments=$read_comments"
         cid=$(marker "$WORK_DIR/record.json" github-comment-id)
         [[ -n "$cid" ]] || continue
         key="$number:$cid"
@@ -333,6 +386,8 @@ validate "$WORK_DIR/gh-comments.json" "$comment_schema and all(.[]; (.issue_url|
 declare -A seen_comments=()
 while IFS= read -r record; do
     printf '%s\n' "$record" > "$WORK_DIR/record.json"
+    mapped_comments=$((mapped_comments + 1))
+    progress "Mapping GitHub comments" "processed=$mapped_comments"
     number=$(jq -r '.issue_url | split("/") | last' "$WORK_DIR/record.json")
     [[ "$number" =~ ^[1-9][0-9]*$ ]] || die "Invalid issue number in GitHub comment"
     [[ -n "${gh_numbers[$number]+x}" ]] || continue
@@ -381,6 +436,8 @@ if ! cmp -s "$WORK_DIR/topics-old.json" "$WORK_DIR/topics-payload.json"; then
 fi
 while IFS= read -r record; do
     printf '%s\n' "$record" > "$WORK_DIR/source.json"
+    processed_issues=$((processed_issues + 1))
+    progress "Comparing and synchronizing issues/comments" "issues=$processed_issues, comments=$processed_comments, mode=$MODE"
     id=$(jq -r .id "$WORK_DIR/source.json")
     number=$(jq -r .number "$WORK_DIR/source.json")
     target=${gt_numbers[$id]:-}
@@ -409,6 +466,8 @@ while IFS= read -r record; do
     [[ -f "$WORK_DIR/gh-comments-$number.jsonl" ]] || continue
     while IFS= read -r comment; do
         printf '%s\n' "$comment" > "$WORK_DIR/source.json"
+        processed_comments=$((processed_comments + 1))
+        progress "Comparing and synchronizing issues/comments" "issues=$processed_issues, current_issue=#$number, comments=$processed_comments, mode=$MODE"
         cid=$(jq -r .id "$WORK_DIR/source.json")
         jq "$body_filter"'{body:(.body | marked("github-comment-id"; $id))}' \
             --argjson id "$cid" "$WORK_DIR/source.json" > "$WORK_DIR/comment-payload.json"
@@ -479,7 +538,7 @@ validate "$WORK_DIR/repositories.json" 'all(.[];
     (.owner.login|type=="string" and test("^[A-Za-z0-9_.-]+$") and .!="." and .!="..") and
     (.mirror|type=="boolean") and (.original_url==null or (.original_url|type=="string")))'
 declare -A discovered_ids=()
-discovered=0 selected=0 skipped=0 succeeded=0 failed=0
+discovered=0 selected=0 skipped=0 succeeded=0 failed=0 unavailable=0
 while IFS= read -r entry; do
     repo_id=$(jq -r .id <<< "$entry")
     [[ -z "${discovered_ids[$repo_id]+x}" ]] || continue
@@ -507,9 +566,15 @@ while IFS= read -r entry; do
     sync_repository "$entry" &
     worker_pid=$!
     if wait "$worker_pid"; then
-        succeeded=$((succeeded + 1))
-        log "OK $full_name"
+        if [[ -f "$RUN_DIR/unavailable-$repo_id" ]]; then
+            unavailable=$((unavailable + 1))
+            log "UNAVAILABLE $full_name: mirror preserved"
+        else
+            succeeded=$((succeeded + 1))
+            log "OK $full_name"
+        fi
     else
+        rc=$?
         failed=$((failed + 1))
         log "FAILED $full_name"
     fi
@@ -519,6 +584,6 @@ while IFS= read -r entry; do
         break
     fi
 done < "$WORK_DIR/repositories.jsonl"
-log "Repositories: discovered=$discovered, selected=$selected, succeeded=$succeeded, failed=$failed, skipped=$skipped"
+log "Repositories: discovered=$discovered, selected=$selected, succeeded=$succeeded, failed=$failed, skipped=$skipped, unavailable=$unavailable"
 ((failed == 0)) || exit 1
 log "Account synchronization completed ($MODE)"

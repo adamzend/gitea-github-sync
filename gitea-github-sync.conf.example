@@ -19,3 +19,6 @@ GITHUB_RATE_LIMIT_RETRIES=2
 LOCK_FILE='/var/run/gitea-github-sync.lock'
 # Used only by --apply-quiet. Parent directory must already exist and be writable.
 QUIET_LOG_FILE='/var/log/gitea-github-sync.log'
+
+# Progress interval in seconds; slow requests may delay the next entry.
+PROGRESS_INTERVAL=60
